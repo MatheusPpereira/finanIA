@@ -1,6 +1,7 @@
-import os
 from dotenv import load_dotenv
-from google import genai
+import os
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.prompts import ChatPromptTemplate
 from sqlalchemy import create_engine, text
 from datetime import datetime
 
@@ -10,48 +11,57 @@ load_dotenv()
 DATABASE_URL = "postgresql://postgres:postgres123@localhost:5433/finania"
 engine = create_engine(DATABASE_URL)
 
-client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+llm = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash",
+    google_api_key=os.getenv("GOOGLE_API_KEY"),
+    temperature=0.7,
+)
 
-print("🤖 FinanIA v0.3 - Com Banco de Dados Ativo")
-print("Teste comandos como: 'gastei 85 no almoço', 'recebi salário', etc.")
+prompt_template = ChatPromptTemplate.from_template("""
+Você é o FinanIA, um assistente financeiro sarcástico, direto e bem brasileiro.
+Hoje é {data_atual}.
+
+Responda de forma natural e sarcástica.
+Se for para registrar uma transação, no final coloque exatamente:
+[REGISTRAR] Descricao | Valor | Tipo | Categoria
+
+Importante: Use "despesa" ou "receita" sempre em minúsculo no campo Tipo.
+
+Usuário: {user_input}
+""")
+
+print("🤖 FinanIA com LangChain + Banco de Dados (Versão Corrigida)")
 print("Digite 'sair' para encerrar\n")
 
 while True:
     user_input = input("Você: ")
     
     if user_input.lower() in ['sair', 'exit', 'quit']:
-        print("👋 FinanIA: Até mais! Cuide bem do seu dinheiro.")
+        print("👋 FinanIA: Até mais!")
         break
 
     if not user_input.strip():
         continue
 
-    # Prompt para o Gemini
-    prompt = f"""
-    Você é o FinanIA, um assistente financeiro sarcástico, brasileiro e direto.
-    Data atual: {datetime.now().strftime('%d/%m/%Y')}
-    
-    Usuário: "{user_input}"
-    
-    Responda de forma natural e sarcástica.
-    Se for para registrar uma transação, no final da resposta coloque exatamente neste formato:
-    [REGISTRAR] Descricao | Valor | Tipo | Categoria
-    """
+    prompt = prompt_template.format(
+        data_atual=datetime.now().strftime("%d/%m/%Y"),
+        user_input=user_input
+    )
 
     try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
-        )
+        response = llm.invoke(prompt)
+        resposta_ia = response.content
         
-        resposta = response.text
-        print(f"\nFinanIA: {resposta}\n")
+        print(f"\nFinanIA: {resposta_ia}\n")
 
-        # Tenta registrar automaticamente
-        if "[REGISTRAR]" in resposta:
+        # Registro automático
+        if "[REGISTRAR]" in resposta_ia:
             try:
-                linha = resposta.split("[REGISTRAR]")[1].strip()
+                linha = resposta_ia.split("[REGISTRAR]")[1].strip()
                 descricao, valor, tipo, categoria = [x.strip() for x in linha.split("|")]
+                
+                # Normaliza o tipo para minúsculo
+                tipo = tipo.lower().strip()
                 
                 with engine.connect() as conn:
                     conn.execute(text("""
@@ -59,12 +69,18 @@ while True:
                         SELECT :desc, :valor, :tipo, id, CURRENT_DATE
                         FROM categorias 
                         WHERE nome ILIKE :cat
-                    """), {"desc": descricao, "valor": float(valor), "tipo": tipo, "cat": categoria})
+                    """), {
+                        "desc": descricao,
+                        "valor": float(valor),
+                        "tipo": tipo,
+                        "cat": categoria
+                    })
                     conn.commit()
                 
-                print(f"✅ Registrado com sucesso: {descricao} - R$ {valor}\n")
+                print(f"✅ Transação registrada com sucesso: {descricao} - R$ {valor}\n")
+                
             except Exception as e:
-                print(f"⚠️ Não consegui registrar: {e}\n")
+                print(f"⚠️ Erro ao registrar: {e}\n")
 
     except Exception as e:
         print(f"❌ Erro: {e}\n")
