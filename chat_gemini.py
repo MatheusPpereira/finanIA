@@ -1,38 +1,70 @@
 import os
 from dotenv import load_dotenv
 from google import genai
+from sqlalchemy import create_engine, text
+from datetime import datetime
 
-# Configuração
-load_dotenv(override=True)
+load_dotenv()
 
-google_api_key = os.getenv("GOOGLE_API_KEY")
+# ====================== CONFIGURAÇÕES ======================
+DATABASE_URL = "postgresql://postgres:postgres123@localhost:5433/finania"
+engine = create_engine(DATABASE_URL)
 
-if not google_api_key:
-    print("❌ Erro: Chave não encontrada no arquivo .env")
-    exit()
+client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
-client = genai.Client(api_key=google_api_key)
-
-print("🤖 FinanIA Chat - Digite 'sair' para encerrar\n")
-print("Faça suas perguntas sobre finanças ou qualquer coisa...\n")
+print("🤖 FinanIA v0.3 - Com Banco de Dados Ativo")
+print("Teste comandos como: 'gastei 85 no almoço', 'recebi salário', etc.")
+print("Digite 'sair' para encerrar\n")
 
 while True:
-    pergunta = input("Você: ")
+    user_input = input("Você: ")
     
-    if pergunta.lower() in ['sair', 'exit', 'quit']:
-        print("👋 FinanIA: Até mais! Cuide bem das suas finanças.")
+    if user_input.lower() in ['sair', 'exit', 'quit']:
+        print("👋 FinanIA: Até mais! Cuide bem do seu dinheiro.")
         break
-    
-    if pergunta.strip() == "":
+
+    if not user_input.strip():
         continue
+
+    # Prompt para o Gemini
+    prompt = f"""
+    Você é o FinanIA, um assistente financeiro sarcástico, brasileiro e direto.
+    Data atual: {datetime.now().strftime('%d/%m/%Y')}
+    
+    Usuário: "{user_input}"
+    
+    Responda de forma natural e sarcástica.
+    Se for para registrar uma transação, no final da resposta coloque exatamente neste formato:
+    [REGISTRAR] Descricao | Valor | Tipo | Categoria
+    """
 
     try:
         response = client.models.generate_content(
             model="gemini-2.5-flash",
-            contents=f"Você é o FinanIA, um assistente financeiro sarcástico, direto e bem brasileiro. Responda sempre em português brasileiro de forma natural e útil.\n\nPergunta: {pergunta}"
+            contents=prompt
         )
         
-        print(f"\nFinanIA: {response.text}\n")
-        
+        resposta = response.text
+        print(f"\nFinanIA: {resposta}\n")
+
+        # Tenta registrar automaticamente
+        if "[REGISTRAR]" in resposta:
+            try:
+                linha = resposta.split("[REGISTRAR]")[1].strip()
+                descricao, valor, tipo, categoria = [x.strip() for x in linha.split("|")]
+                
+                with engine.connect() as conn:
+                    conn.execute(text("""
+                        INSERT INTO transacoes (descricao, valor, tipo, categoria_id, data)
+                        SELECT :desc, :valor, :tipo, id, CURRENT_DATE
+                        FROM categorias 
+                        WHERE nome ILIKE :cat
+                    """), {"desc": descricao, "valor": float(valor), "tipo": tipo, "cat": categoria})
+                    conn.commit()
+                
+                print(f"✅ Registrado com sucesso: {descricao} - R$ {valor}\n")
+            except Exception as e:
+                print(f"⚠️ Não consegui registrar: {e}\n")
+
     except Exception as e:
-        print(f"\n❌ Erro ao gerar resposta: {e}\n")
+        print(f"❌ Erro: {e}\n")
