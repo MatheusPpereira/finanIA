@@ -61,18 +61,18 @@ st.markdown("""
     }
 
     /* ── Logo / Header ── */
-    .financia-header {
+    .finania-header {
         display: flex;
         align-items: center;
         gap: 14px;
         padding: 28px 0 8px 0;
         margin-bottom: 4px;
     }
-    .financia-logo {
+    .finania-logo {
         font-size: 2.6rem;
         line-height: 1;
     }
-    .financia-title {
+    .finania-title {
         font-family: 'Syne', sans-serif;
         font-size: 2.4rem;
         font-weight: 800;
@@ -83,7 +83,7 @@ st.markdown("""
         letter-spacing: -0.02em;
         line-height: 1;
     }
-    .financia-subtitle {
+    .finania-subtitle {
         font-family: 'Inter', sans-serif;
         font-size: 0.82rem;
         color: #4a5568;
@@ -294,7 +294,7 @@ st.markdown("""
     }
 
     /* ── Rodapé ── */
-    .financia-footer {
+    .finania-footer {
         text-align: center;
         padding: 24px 0 8px 0;
         font-size: 0.72rem;
@@ -362,11 +362,19 @@ with st.sidebar:
                            ["Normal", "Modo Professor", "Modo Técnico", "Modo Resumido", "Modo Detalhado"])
 
     st.markdown("<hr>", unsafe_allow_html=True)
-    st.markdown("""
+    # Status dos serviços
+    try:
+        with engine.connect() as _c:
+            _c.execute(text("SELECT 1"))
+        db_status = '🟢 <span style="color:#a78bfa;">PostgreSQL</span> ativo'
+    except:
+        db_status = '🔴 <span style="color:#f87171;">PostgreSQL</span> offline'
+
+    st.markdown(f"""
     <div style="font-size:0.7rem; color:#2d3748; font-family:'Inter',sans-serif; line-height:1.6;">
         🟢 <span style="color:#63dca0;">Gemini 2.5 Flash</span> conectado<br>
         🟢 <span style="color:#4ab8f0;">Llama 3.3 70B</span> conectado<br>
-        🟢 <span style="color:#a78bfa;">PostgreSQL</span> ativo
+        {db_status}
     </div>
     """, unsafe_allow_html=True)
 
@@ -407,48 +415,67 @@ def get_historico():
         return f"Erro ao buscar histórico: {e}"
 
 
-def get_saldo_e_df():
+def get_dados_dashboard():
+    """
+    Retorna todos os dados necessários para o dashboard.
+    - saldo: acumulado total de todo o histórico (receitas - despesas)
+    - despesas_mes / receitas_mes: apenas do mês atual
+    - df_total: todas as transações para a tabela
+    - df_mes: transações do mês para os gráficos
+    """
     try:
+        hoje = datetime.now()
         with engine.connect() as conn:
-            df = pd.read_sql(
-                """SELECT t.*, c.nome as categoria
-                   FROM transacoes t
-                   LEFT JOIN categorias c ON t.categoria_id = c.id
-                   ORDER BY t.data DESC""", conn)
+            df_total = pd.read_sql("""
+                SELECT t.id, t.data, t.descricao, t.valor, t.tipo, c.nome as categoria
+                FROM transacoes t
+                LEFT JOIN categorias c ON t.categoria_id = c.id
+                ORDER BY t.data DESC
+            """, conn)
+
             saldo = conn.execute(text("""
                 SELECT COALESCE(SUM(CASE WHEN tipo = 'receita' THEN valor ELSE 0 END), 0) -
                        COALESCE(SUM(CASE WHEN tipo = 'despesa' THEN valor ELSE 0 END), 0)
                 FROM transacoes
             """)).scalar()
-        return df, float(saldo)
+
+            despesas_mes = conn.execute(text("""
+                SELECT COALESCE(SUM(valor), 0) FROM transacoes
+                WHERE tipo = 'despesa'
+                  AND EXTRACT(MONTH FROM data) = :mes
+                  AND EXTRACT(YEAR FROM data) = :ano
+            """), {"mes": hoje.month, "ano": hoje.year}).scalar()
+
+            receitas_mes = conn.execute(text("""
+                SELECT COALESCE(SUM(valor), 0) FROM transacoes
+                WHERE tipo = 'receita'
+                  AND EXTRACT(MONTH FROM data) = :mes
+                  AND EXTRACT(YEAR FROM data) = :ano
+            """), {"mes": hoje.month, "ano": hoje.year}).scalar()
+
+        if not df_total.empty:
+            df_total['data'] = pd.to_datetime(df_total['data'])
+            df_mes = df_total[
+                (df_total['data'].dt.month == hoje.month) &
+                (df_total['data'].dt.year == hoje.year)
+            ].copy()
+        else:
+            df_mes = pd.DataFrame()
+
+        return df_total, df_mes, float(saldo), float(despesas_mes), float(receitas_mes)
+
     except Exception as e:
-        st.error(f"Erro ao carregar dados: {e}")
-        return pd.DataFrame(), 0.0
-
-
-def get_totais_mes(df):
-    """Retorna despesas e receitas do mês atual."""
-    if df.empty:
-        return 0.0, 0.0
-    df_copia = df.copy()
-    df_copia['data'] = pd.to_datetime(df_copia['data'])
-    hoje = datetime.now()
-    df_mes = df_copia[
-        (df_copia['data'].dt.month == hoje.month) &
-        (df_copia['data'].dt.year == hoje.year)
-    ]
-    despesas = float(df_mes[df_mes['tipo'] == 'despesa']['valor'].sum())
-    receitas = float(df_mes[df_mes['tipo'] == 'receita']['valor'].sum())
-    return despesas, receitas
+        st.error(f"Erro ao carregar dados do dashboard: {e}")
+        return pd.DataFrame(), pd.DataFrame(), 0.0, 0.0, 0.0
 
 
 # ====================== HEADER PRINCIPAL ======================
 st.markdown("""
-<div class="financia-header">
-    <div class="financia-logo">💰</div>
+<div class="finania-header">
+    <div class="finania-logo">💰</div>
     <div>
-        <div class="financia-title">FinancIA</div>
-        <div class="financia-subtitle">Assistente Financeiro Pessoal com IA</div>
+        <div class="finania-title">FinancIA</div>
+        <div class="finania-subtitle">Assistente Financeiro Pessoal com IA</div>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -470,7 +497,7 @@ if pagina == "💬 Chat Inteligente":
             <div class="chat-welcome-title">Olá! Sou o FinancIA</div>
             <div class="chat-welcome-sub">
                 Seu assistente financeiro pessoal com IA. Me conte sobre seus gastos,
-                receitas e metas — vou te ajudar a organizar suas finanças com um toque de sarcasmo brasileiro. 😄
+                receitas e metas — vou te ajudar a organizar suas finanças com orientações claras e personalizadas.
             </div>
             <div style="margin-top: 20px;">
                 <span class="suggestion-chip">💸 Gastei R$85 no almoço</span>
@@ -493,11 +520,19 @@ if pagina == "💬 Chat Inteligente":
                 historico = get_historico()
 
                 # Categorias disponíveis no banco
-                categorias_disponiveis = "Alimentação, Transporte, Moradia, Delivery, Lazer, Salário, Freelance"
+                categorias_disponiveis = "Alimentação, Transporte, Moradia, Delivery, Lazer, Saúde, Educação, Vestuário, Assinaturas, Outros, Salário, Freelance, Investimentos, Outros Ganhos"
 
                 full_prompt = f"""
-Você é o FinancIA, assistente financeiro pessoal sarcástico e útil. Responda SEMPRE em português brasileiro.
-Modo atual: {modo_ia}
+Você é o FinancIA, um assistente financeiro pessoal profissional e confiável. Responda SEMPRE em português brasileiro.
+
+PERFIL DE COMPORTAMENTO:
+- Comunique-se de forma clara, objetiva e respeitosa, como um consultor financeiro experiente.
+- Ofereça análises e orientações embasadas, sem julgamentos sobre os hábitos do usuário.
+- Quando identificar padrões de gastos preocupantes, sinalize com cuidado e sugira alternativas práticas.
+- Seja empático e encorajador — finanças pessoais podem ser um tema sensível para muitas pessoas.
+- Evite respostas genéricas: use os dados do histórico para personalizar cada orientação.
+- Modo de resposta atual: {modo_ia} — adapte o nível de detalhe e linguagem conforme o modo.
+
 Data de hoje: {datetime.now().strftime('%d/%m/%Y')}
 
 HISTÓRICO RECENTE DO USUÁRIO:
@@ -552,22 +587,46 @@ Mensagem do usuário: {prompt}
                         if len(partes) == 4:
                             descricao, valor_str, tipo, categoria = partes
 
-                            # Limpar e validar valor
-                            valor_str = valor_str.replace("R$", "").replace(".", "").replace(",", ".").strip()
-                            valor_limpo = float(valor_str) if valor_str.replace(".", "").isdigit() else None
+                            # Limpar e validar valor corretamente
+                            import re
+                            def parse_valor(s):
+                                """
+                                Converte string de valor para float com segurança.
+                                Suporta: 110 | 1.100,00 | 1,100.00 | R$ 110 | 1100.50
+                                """
+                                s = s.replace("R$", "").strip()
+                                # Formato brasileiro: 1.100,00 → tem ponto como milhar e vírgula como decimal
+                                if re.search(r'\d\.\d{3},\d{2}$', s):
+                                    s = s.replace(".", "").replace(",", ".")
+                                # Só vírgula como decimal: 110,50
+                                elif "," in s and "." not in s:
+                                    s = s.replace(",", ".")
+                                # Ponto como decimal: 110.50 — mantém como está
+                                # Sem separadores: 110 — mantém como está
+                                else:
+                                    s = s.replace(",", "")
+                                try:
+                                    return float(s)
+                                except:
+                                    return None
+
+                            valor_limpo = parse_valor(valor_str)
 
                             # Fallbacks para campos inválidos
                             if not descricao or descricao == "?":
-                                descricao = prompt[:60]  # usa o que o usuário digitou
+                                descricao = prompt[:60]
                             if not tipo or tipo == "?" or tipo.lower() not in ["despesa", "receita"]:
                                 tipo = "despesa"
                             if not categoria or categoria == "?":
-                                categoria = "Lazer" if tipo == "despesa" else "Freelance"
+                                categoria = "Outros" if tipo == "despesa" else "Outros Ganhos"
                             if valor_limpo is None or valor_limpo <= 0:
-                                # Tenta extrair número da mensagem do usuário
-                                import re
-                                nums = re.findall(r'[\d]+(?:[.,]\d+)?', prompt.replace(".", "").replace(",", "."))
-                                valor_limpo = float(nums[0]) if nums else None
+                                # Extrai número diretamente do texto do usuário
+                                nums = re.findall(r'\d+(?:[.,]\d+)?', prompt)
+                                for n in nums:
+                                    v = parse_valor(n)
+                                    if v and v > 0:
+                                        valor_limpo = v
+                                        break
 
                             if valor_limpo and valor_limpo > 0:
                                 if salvar_transacao(descricao, valor_limpo, tipo, categoria):
@@ -584,8 +643,14 @@ Mensagem do usuário: {prompt}
 elif pagina == "📊 Dashboard":
     st.markdown('<div class="page-header">📊 Dashboard Financeiro</div>', unsafe_allow_html=True)
 
-    df, saldo = get_saldo_e_df()
-    despesas_mes, receitas_mes = get_totais_mes(df)
+    df_total, df_mes, saldo, despesas_mes, receitas_mes = get_dados_dashboard()
+    meses_pt = {
+        1:'Janeiro', 2:'Fevereiro', 3:'Março', 4:'Abril',
+        5:'Maio', 6:'Junho', 7:'Julho', 8:'Agosto',
+        9:'Setembro', 10:'Outubro', 11:'Novembro', 12:'Dezembro'
+    }
+    hoje_dash = datetime.now()
+    nome_mes = f"{meses_pt[hoje_dash.month]}/{hoje_dash.year}"
 
     # Métricas
     col1, col2, col3 = st.columns(3)
@@ -594,36 +659,36 @@ elif pagina == "📊 Dashboard":
         st.markdown(f"""
         <div class="metric-card">
             <div class="metric-icon">💰</div>
-            <div class="metric-label">Saldo Atual</div>
+            <div class="metric-label">Saldo Acumulado Total</div>
             <div class="metric-value {cor_saldo}">R$ {saldo:,.2f}</div>
         </div>""", unsafe_allow_html=True)
     with col2:
         st.markdown(f"""
         <div class="metric-card">
             <div class="metric-icon">📉</div>
-            <div class="metric-label">Despesas do Mês</div>
+            <div class="metric-label">Despesas — {nome_mes}</div>
             <div class="metric-value red">R$ {despesas_mes:,.2f}</div>
         </div>""", unsafe_allow_html=True)
     with col3:
         st.markdown(f"""
         <div class="metric-card">
             <div class="metric-icon">📈</div>
-            <div class="metric-label">Receitas do Mês</div>
+            <div class="metric-label">Receitas — {nome_mes}</div>
             <div class="metric-value green">R$ {receitas_mes:,.2f}</div>
         </div>""", unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Gráficos
-    if not df.empty:
-        col1, col2 = st.columns(2)
+    # Gráficos — usam df_mes para refletir o mês atual
+    col1, col2 = st.columns(2)
 
-        with col1:
-            gastos = df[df['tipo'] == 'despesa'].groupby('categoria')['valor'].sum()
+    with col1:
+        if not df_mes.empty:
+            gastos = df_mes[df_mes['tipo'] == 'despesa'].groupby('categoria')['valor'].sum()
             if not gastos.empty:
                 fig = px.pie(
                     values=gastos.values, names=gastos.index,
-                    title="Gastos por Categoria",
+                    title=f"Gastos por Categoria — {nome_mes}",
                     color_discrete_sequence=px.colors.sequential.Teal
                 )
                 fig.update_layout(
@@ -634,15 +699,19 @@ elif pagina == "📊 Dashboard":
                     legend=dict(font=dict(color="#8a9ab5"))
                 )
                 st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("Sem despesas registradas este mês.")
+        else:
+            st.info("Sem transações este mês.")
 
-        with col2:
-            df_ev = df.copy()
-            df_ev['data'] = pd.to_datetime(df_ev['data'])
-            evolucao = df_ev.groupby(['data', 'tipo'])['valor'].sum().reset_index()
+    with col2:
+        if not df_total.empty:
+            # Gráfico de evolução usa histórico completo para mostrar tendência
+            evolucao = df_total.groupby(['data', 'tipo'])['valor'].sum().reset_index()
             if not evolucao.empty:
                 fig2 = px.line(
                     evolucao, x='data', y='valor', color='tipo',
-                    title="Evolução por Tipo",
+                    title="Evolução Histórica por Tipo",
                     color_discrete_map={"despesa": "#f87171", "receita": "#63dca0"}
                 )
                 fig2.update_layout(
@@ -651,16 +720,16 @@ elif pagina == "📊 Dashboard":
                     font=dict(family="Inter", color="#8a9ab5"),
                     title_font=dict(family="Syne", size=14, color="#e2e8f4"),
                     legend=dict(font=dict(color="#8a9ab5"), title_text=""),
-                    xaxis=dict(gridcolor="rgba(99,220,160,0.07)"),
-                    yaxis=dict(gridcolor="rgba(99,220,160,0.07)")
+                    xaxis=dict(gridcolor="rgba(99,220,160,0.07)", title="Data"),
+                    yaxis=dict(gridcolor="rgba(99,220,160,0.07)", title="R$")
                 )
                 fig2.update_traces(line=dict(width=2.5))
                 st.plotly_chart(fig2, use_container_width=True)
 
     st.markdown('<div style="font-family:Syne,sans-serif;font-size:1rem;font-weight:700;color:#e2e8f4;margin:16px 0 12px;">Últimas Transações</div>', unsafe_allow_html=True)
-    if not df.empty:
+    if not df_total.empty:
         st.dataframe(
-            df.head(10)[['data', 'descricao', 'valor', 'tipo', 'categoria']],
+            df_total.head(10)[['data', 'descricao', 'valor', 'tipo', 'categoria']],
             use_container_width=True, hide_index=True
         )
     else:
@@ -669,33 +738,95 @@ elif pagina == "📊 Dashboard":
 # ====================== TRANSAÇÕES ======================
 elif pagina == "📋 Transações":
     st.markdown('<div class="page-header">📋 Todas as Transações</div>', unsafe_allow_html=True)
+
+    # ── Registro manual ──
+    with st.expander("➕ Registrar Transação Manualmente", expanded=False):
+        with st.form("form_transacao_manual"):
+            col_a, col_b, col_c = st.columns(3)
+            with col_a:
+                desc_manual = st.text_input("Descrição", placeholder="Ex: Almoço, Salário...")
+                data_manual = st.date_input("Data", value=date.today())
+            with col_b:
+                valor_manual = st.number_input("Valor (R$)", min_value=0.01, step=10.0)
+                tipo_manual = st.selectbox("Tipo", ["despesa", "receita"])
+            with col_c:
+                try:
+                    with engine.connect() as _conn:
+                        cats_db = pd.read_sql(
+                            "SELECT nome FROM categorias WHERE tipo = 'despesa' OR tipo = 'receita' ORDER BY tipo, nome",
+                            _conn)
+                    lista_cats = cats_db['nome'].tolist()
+                except:
+                    lista_cats = ["Alimentação","Transporte","Moradia","Delivery","Lazer",
+                                  "Saúde","Educação","Vestuário","Assinaturas","Outros",
+                                  "Salário","Freelance","Investimentos","Outros Ganhos"]
+                cat_manual = st.selectbox("Categoria", lista_cats)
+
+
+            if st.form_submit_button("💾 Registrar"):
+                if desc_manual.strip() and valor_manual > 0:
+                    try:
+                        with engine.connect() as conn:
+                            conn.execute(text("""
+                                INSERT INTO transacoes (descricao, valor, tipo, categoria_id, data)
+                                SELECT :desc, :valor, :tipo, id, :data
+                                FROM categorias WHERE nome ILIKE :cat
+                            """), {"desc": desc_manual, "valor": valor_manual,
+                                   "tipo": tipo_manual, "data": data_manual,
+                                   "cat": cat_manual})
+                            conn.commit()
+                        st.success(f"✅ Transação registrada: {desc_manual} — R$ {valor_manual:,.2f}")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao registrar: {e}")
+                else:
+                    st.warning("Preencha descrição e valor.")
+
+    # ── Listagem com filtros ──
     try:
         with engine.connect() as conn:
-            df = pd.read_sql(
-                """SELECT t.id, t.data, t.descricao, t.valor, t.tipo, c.nome as categoria
-                   FROM transacoes t
-                   LEFT JOIN categorias c ON t.categoria_id = c.id
-                   ORDER BY t.data DESC""", conn)
+            df = pd.read_sql("""
+                SELECT t.id, t.data, t.descricao, t.valor, t.tipo,
+                       c.nome as categoria
+                FROM transacoes t
+                LEFT JOIN categorias c ON t.categoria_id = c.id
+                ORDER BY t.data DESC, t.created_at DESC
+            """, conn)
 
         if not df.empty:
-            # Filtros rápidos
-            col_f1, col_f2, col_f3 = st.columns(3)
+            col_f1, col_f2, col_f3, col_f4 = st.columns(4)
             with col_f1:
-                tipo_filtro = st.selectbox("Filtrar por tipo", ["Todos", "despesa", "receita"])
+                tipo_filtro = st.selectbox("Tipo", ["Todos", "despesa", "receita"])
             with col_f2:
-                categorias_disponiveis = ["Todas"] + sorted(df['categoria'].dropna().unique().tolist())
-                cat_filtro = st.selectbox("Filtrar por categoria", categorias_disponiveis)
+                cats_lista = ["Todas"] + sorted(df['categoria'].dropna().unique().tolist())
+                cat_filtro = st.selectbox("Categoria", cats_lista)
             with col_f3:
+                meses_filtro = ["Todos os meses"] + sorted(
+                    df['data'].astype(str).str[:7].unique().tolist(), reverse=True)
+                mes_filtro = st.selectbox("Mês", meses_filtro)
+            with col_f4:
                 st.markdown("<br>", unsafe_allow_html=True)
-                st.metric("Total de registros", len(df))
+                total_filtrado_label = st.empty()
 
             df_filtrado = df.copy()
             if tipo_filtro != "Todos":
                 df_filtrado = df_filtrado[df_filtrado['tipo'] == tipo_filtro]
             if cat_filtro != "Todas":
                 df_filtrado = df_filtrado[df_filtrado['categoria'] == cat_filtro]
+            if mes_filtro != "Todos os meses":
+                df_filtrado = df_filtrado[df_filtrado['data'].astype(str).str[:7] == mes_filtro]
 
+            total_filtrado_label.metric("Registros encontrados", len(df_filtrado))
             st.dataframe(df_filtrado, use_container_width=True, hide_index=True)
+
+            # Resumo do filtro atual
+            if not df_filtrado.empty:
+                total_desp = df_filtrado[df_filtrado['tipo']=='despesa']['valor'].sum()
+                total_rec  = df_filtrado[df_filtrado['tipo']=='receita']['valor'].sum()
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Total Despesas filtradas", f"R$ {total_desp:,.2f}")
+                c2.metric("Total Receitas filtradas", f"R$ {total_rec:,.2f}")
+                c3.metric("Saldo do filtro", f"R$ {total_rec - total_desp:,.2f}")
         else:
             st.info("Nenhuma transação registrada ainda.")
     except Exception as e:
@@ -793,4 +924,4 @@ elif pagina == "🎯 Metas":
         st.info("Nenhuma meta cadastrada ainda. Crie sua primeira meta acima! 🎯")
 
 # ====================== RODAPÉ ======================
-st.markdown('<div class="financia-footer">FinancIA v2.8 · Gemini + Groq + PostgreSQL · Assistente Financeiro Pessoal com IA</div>', unsafe_allow_html=True)
+st.markdown('<div class="finania-footer">FinancIA v2.8 · Gemini + Groq + PostgreSQL · Assistente Financeiro Pessoal com IA</div>', unsafe_allow_html=True)
